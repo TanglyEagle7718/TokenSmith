@@ -141,12 +141,12 @@ def get_answer(
     """
     Run a single query through the pipeline.
     """    
-    chunks = artifacts["chunks"]
+    #chunks = artifacts["chunks"]
     cascade_retriever = artifacts["cascade_retriever"]
     all_sources = artifacts["sources"]
-    sources = artifacts["sources"]
-    retrievers = artifacts["retrievers"]
-    ranker = artifacts["ranker"]
+    #sources = artifacts["sources"]
+    #retrievers = artifacts["retrievers"]
+    #ranker = artifacts["ranker"]
     
     logger.log_query_start(question)
     
