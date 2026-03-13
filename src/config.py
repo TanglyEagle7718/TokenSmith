@@ -46,6 +46,8 @@ class RAGConfig:
     
     # index parameters
     use_indexed_chunks: bool = False
+    cloud_indexing: bool = False
+    jit_indexing: bool = False
     extracted_index_path: os.PathLike = "data/extracted_index.json"
     page_to_chunk_map_path: os.PathLike = "index/sections/textbook_index_page_to_chunk_map.json"
 

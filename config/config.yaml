@@ -14,3 +14,5 @@ hyde_max_tokens: 300
 use_indexed_chunks: false
 rerank_mode: "cross_encoder"
 rerank_top_k: 5
+cloud_indexing: false
+jit_indexing: false

@@ -58,29 +58,44 @@ def parse_args() -> argparse.Namespace:
 def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
     strategy = cfg.get_chunk_strategy()
     chunker = DocumentChunker(strategy=strategy, keep_tables=args.keep_tables)
-    artifacts_dir = cfg.get_artifacts_directory()
+    artifacts_dir = cfg.get_artifacts_directory(partial=args.partial)
 
     data_dir = pathlib.Path("data")
     print(f"Looking for markdown files in {data_dir.resolve()}...")
     md_files = sorted(data_dir.glob("*.md"))
     print(f"Found {len(md_files)} markdown files.")
-    print(f"First 5 markdown files: {[str(f) for f in md_files[:5]]}")
 
     if not md_files:
         print("ERROR: No markdown files found in data/.", file=sys.stderr)
         sys.exit(1)
 
-    build_index(
-        markdown_file=str(md_files[0]),
-        chunker=chunker,
-        chunk_config=cfg.chunk_config,
-        embedding_model_path=cfg.embed_model,
-        artifacts_dir=artifacts_dir,
-        index_prefix=args.index_prefix,
-        use_multiprocessing=args.multiproc_indexing,
-        use_headings=args.embed_with_headings,
-        chapters_to_index=args.chapters,
-    )
+    if args.partial:
+        from src.local_partial_indexer import LocalPartialIndexer
+        from src.cloud_partial_indexer import CloudPartialIndexer
+        indexer = CloudPartialIndexer() if cfg.cloud_indexing else LocalPartialIndexer()
+        indexer.build_index(
+            markdown_file=str(md_files[0]),
+            chunker=chunker,
+            chunk_config=cfg.chunk_config,
+            embedding_model_path=cfg.embed_model,
+            artifacts_dir=artifacts_dir,
+            index_prefix=args.index_prefix,
+            use_multiprocessing=args.multiproc_indexing,
+            use_headings=args.embed_with_headings,
+            chapters_to_index=args.chapters,
+        )
+    else:
+        build_index(
+            markdown_file=str(md_files[0]),
+            chunker=chunker,
+            chunk_config=cfg.chunk_config,
+            embedding_model_path=cfg.embed_model,
+            artifacts_dir=artifacts_dir,
+            index_prefix=args.index_prefix,
+            use_multiprocessing=args.multiproc_indexing,
+            use_headings=args.embed_with_headings,
+            chapters_to_index=args.chapters,
+        )
 
 def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
     """Handles the logic for adding chapters to an existing index."""
@@ -92,15 +107,29 @@ def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
     chunker = DocumentChunker(strategy=strategy)
     artifacts_dir = cfg.get_artifacts_directory(partial=args.partial)
 
-    add_to_index(
-        markdown_file="data/silberschatz.md",
-        chunker=chunker,
-        chunk_config=cfg.chunk_config,
-        embedding_model_path=cfg.embed_model,
-        artifacts_dir=artifacts_dir,
-        index_prefix=args.index_prefix,
-        chapters_to_add=args.chapters,
-    )
+    if args.partial:
+        from src.local_partial_indexer import LocalPartialIndexer
+        from src.cloud_partial_indexer import CloudPartialIndexer
+        indexer = CloudPartialIndexer() if cfg.cloud_indexing else LocalPartialIndexer()
+        indexer.add_to_index(
+            markdown_file="data/silberschatz.md",
+            chunker=chunker,
+            chunk_config=cfg.chunk_config,
+            embedding_model_path=cfg.embed_model,
+            artifacts_dir=artifacts_dir,
+            index_prefix=args.index_prefix,
+            chapters_to_add=args.chapters,
+        )
+    else:
+        add_to_index(
+            markdown_file="data/silberschatz.md",
+            chunker=chunker,
+            chunk_config=cfg.chunk_config,
+            embedding_model_path=cfg.embed_model,
+            artifacts_dir=artifacts_dir,
+            index_prefix=args.index_prefix,
+            chapters_to_add=args.chapters,
+        )
     print("Successfully added chapters to the index.")
 
 def use_indexed_chunks(question: str, chunks: list, cfg: RAGConfig, args: argparse.Namespace) -> list:
@@ -277,50 +306,70 @@ def get_keywords(question: str) -> list:
     keywords = [word.strip('.,!?()[]') for word in words if word not in stopwords]
     return keywords
 
+def refresh_artifacts(args: argparse.Namespace, cfg: RAGConfig):
+    """Reloads artifacts and returns a new artifacts dictionary."""
+    artifacts_dir = cfg.get_artifacts_directory(partial=args.partial)
+    cfg.page_to_chunk_map_path = cfg.get_page_to_chunk_map_path(artifacts_dir, args.index_prefix)
+    faiss_idx, bm25_idx, chunks, sources, meta = load_artifacts(artifacts_dir, args.index_prefix)
+    
+    retrievers = [FAISSRetriever(faiss_idx, cfg.embed_model), BM25Retriever(bm25_idx)]
+    if cfg.ranker_weights.get("index_keywords", 0) > 0:
+        retrievers.append(IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path))
+    
+    ranker = EnsembleRanker(ensemble_method=cfg.ensemble_method, weights=cfg.ranker_weights, rrf_k=int(cfg.rrf_k))
+    return {"chunks": chunks, "sources": sources, "retrievers": retrievers, "ranker": ranker, "meta": meta}
+
 def run_chat_session(args: argparse.Namespace, cfg: RAGConfig):
     logger = get_logger()
     console = Console()
 
     print("Initializing TokenSmith Chat...")
     try:
-        artifacts_dir = cfg.get_artifacts_directory(partial=args.partial)
-        cfg.page_to_chunk_map_path = cfg.get_page_to_chunk_map_path(artifacts_dir, args.index_prefix)
-        faiss_idx, bm25_idx, chunks, sources, meta = load_artifacts(artifacts_dir, args.index_prefix)
-        print(f"Loaded {len(chunks)} chunks and {len(sources)} sources from artifacts.")
-        retrievers = [FAISSRetriever(faiss_idx, cfg.embed_model), BM25Retriever(bm25_idx)]
-        if cfg.ranker_weights.get("index_keywords", 0) > 0:
-            retrievers.append(IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path))
-        
-        ranker = EnsembleRanker(ensemble_method=cfg.ensemble_method, weights=cfg.ranker_weights, rrf_k=int(cfg.rrf_k))
-        print("Loaded retrievers and initialized ranker.")
-        artifacts = {"chunks": chunks, "sources": sources, "retrievers": retrievers, "ranker": ranker, "meta": meta}
+        artifacts = refresh_artifacts(args, cfg)
+        print(f"Loaded {len(artifacts['chunks'])} chunks and {len(artifacts['sources'])} sources.")
     except Exception as e:
         print(f"ERROR: {e}. Run 'index' mode first.")
         sys.exit(1)
+
     print("Initialization complete. You can start asking questions!")
     print("Type 'exit' or 'quit' to end the session.")
+    
     while True:
         try:
             q = input("\nAsk > ").strip()
-            if not q:
-                continue
-            if q.lower() in {"exit", "quit"}:
-                print("Goodbye!")
-                break
+            if not q: continue
+            if q.lower() in {"exit", "quit"}: break
 
-            # Use the single query function. get_answer also renders the streaming markdown and takes care of logging, so we need not do anything else here.
-            ans = get_answer(q, cfg, args, logger, console, artifacts=artifacts)
+            if args.partial and cfg.jit_indexing:
+                from src.local_partial_indexer import LocalPartialIndexer
+                from src.cloud_partial_indexer import CloudPartialIndexer
+                indexer = CloudPartialIndexer() if cfg.cloud_indexing else LocalPartialIndexer()
+                
+                md_files = sorted(pathlib.Path("data").glob("*.md"))
+                if md_files:
+                    chaps = indexer.jit_index(
+                        question=q,
+                        markdown_file=str(md_files[0]),
+                        chunker=DocumentChunker(strategy=cfg.get_chunk_strategy()),
+                        chunk_config=cfg.chunk_config,
+                        embedding_model_path=cfg.embed_model,
+                        artifacts_dir=cfg.get_artifacts_directory(partial=True),
+                        index_prefix=args.index_prefix,
+                        extracted_index_path=cfg.extracted_index_path,
+                        use_headings=args.embed_with_headings
+                    )
+                    if chaps:
+                        print(f"Refreshing artifacts with new chapters: {chaps}")
+                        artifacts = refresh_artifacts(args, cfg)
 
-        except KeyboardInterrupt:
-            print("\nGoodbye!")
-            break
+            get_answer(q, cfg, args, logger, console, artifacts=artifacts)
+
+        except KeyboardInterrupt: break
         except Exception as e:
             print(f"\nAn unexpected error occurred: {e}")
             import traceback
             traceback.print_exc()
             break
-
-
 
 def main():
     args = parse_args()
