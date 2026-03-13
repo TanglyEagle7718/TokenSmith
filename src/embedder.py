@@ -4,15 +4,24 @@ import multiprocessing
 import multiprocessing.pool
 import numpy as np
 from pathlib import Path
+import os
 from typing import List, Union, Optional
 from llama_cpp import Llama
 from tqdm import tqdm
+
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
+    types = None
 
 # Global variables for worker processes
 _worker_model: Optional[Llama] = None
 _worker_embedding_dim: int = 0
 
 def _init_worker(model_path: str, n_ctx: int, n_threads: int):
+# ... (rest of methods until SentenceTransformer)
     """
     Initializes the model inside a worker process.
     """
@@ -296,3 +305,124 @@ class CachedEmbedder:
     def __getattr__(self, name):
         """Delegate other methods to wrapped embedder."""
         return getattr(self.embedder, name)
+
+import os
+import time
+from typing import Union, List
+import numpy as np
+from tqdm import tqdm
+from google import genai
+from google.genai import types
+
+class GeminiEmbedder:
+    """
+    Embedding model that uses the Google Gemini API.
+    """
+    def __init__(self, model_name: str = "gemini-embedding-001"):
+        """
+        Initialize the Gemini embedding model.
+        
+        Args:
+            model_name: The name of the Gemini embedding model to use.
+        """
+        self.model_name = model_name
+        
+        self.api_key = os.environ.get("GEMINI_API_KEY")
+        if not self.api_key:
+            raise ValueError("API Key not found. Please export GEMINI_API_KEY in your environment.")
+
+        self._client = genai.Client(api_key=self.api_key)
+        self._embedding_dimension = None
+
+        print("--- Available Embedding Models ---")
+        for m in self._client.models.list():
+            if hasattr(m, 'supported_actions') and 'embedContent' in m.supported_actions:
+                print(f"Model ID: {m.name}")
+                print(f"  > Display Name: {m.display_name}")
+                print("-" * 30)
+
+    @property
+    def embedding_dimension(self) -> int:
+        """Get embedding dimension (cached after first call)."""
+        if self._embedding_dimension is None:
+            res = self._client.models.embed_content(
+                model=self.model_name,
+                contents="test"
+            )
+            self._embedding_dimension = len(res.embeddings[0].values)
+        return self._embedding_dimension
+
+    def encode(self, 
+           texts: Union[str, List[str]], 
+           batch_size: int = 20,  
+           normalize: bool = False,
+           show_progress_bar: bool = False,
+           max_retries: int = 5,      # Added parameter for retries
+           base_delay: float = 2.0,   # Added parameter for backoff delay
+           **kwargs) -> np.ndarray:
+        """
+        Encode texts using the Gemini API with exponential backoff for rate limits.
+        """
+        if isinstance(texts, str):
+            texts = [texts]
+            
+        if not texts:
+            return np.array([], dtype=np.float32).reshape(0, -1)
+        
+        embeddings = []
+        num_batches = (len(texts) + batch_size - 1) // batch_size
+
+        for i in tqdm(range(num_batches), desc="Cloud Encoding", disable=not show_progress_bar):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, len(texts))
+            batch_texts = texts[start_idx:end_idx]
+            
+            # --- Retry Logic Loop ---
+            for attempt in range(max_retries):
+                try:
+                    response = self._client.models.embed_content(
+                        model=self.model_name,
+                        contents=batch_texts,
+                        config=types.EmbedContentConfig(
+                            task_type="RETRIEVAL_DOCUMENT" if len(batch_texts) > 1 else "RETRIEVAL_QUERY"
+                        )
+                    )
+                    
+                    batch_embeddings = [e.values for e in response.embeddings]
+                    embeddings.extend(batch_embeddings)
+                    
+                    # Optional: A tiny sleep between successful batches to pace out RPM
+                    time.sleep(0.5) 
+                    break  # Break out of the retry loop on success
+                    
+                except Exception as e:
+                    error_str = str(e).lower()
+                    # Check if the error is a rate limit (429) issue
+                    if "429" in error_str or "exhausted" in error_str:
+                        if attempt < max_retries - 1:
+                            sleep_time = base_delay * (2 ** attempt)
+                            print(f"\nRate limit hit. Retrying batch {i+1} in {sleep_time} seconds...")
+                            time.sleep(sleep_time)
+                        else:
+                            print(f"\nFailed batch {i+1} after {max_retries} retries: {e}")
+                            # Fallback: append zeros on ultimate failure
+                            for _ in batch_texts:
+                                embeddings.append([0.0] * self.embedding_dimension)
+                    else:
+                        # If it's a different error (e.g., 400 Bad Request), don't retry, just fail gracefully
+                        print(f"\nError encoding cloud batch {i+1}: {e}")
+                        for _ in batch_texts:
+                            embeddings.append([0.0] * self.embedding_dimension)
+                        break 
+        
+        vecs = np.array(embeddings, dtype=np.float32)
+        
+        if normalize:
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            vecs = vecs / np.where(norms == 0, 1e-12, norms)
+            
+        return vecs
+
+    def get_sentence_embedding_dimension(self) -> int:
+        """Get the dimension of embeddings (compatibility method)."""
+        return self.embedding_dimension
