@@ -28,6 +28,7 @@ from src.retriever import (
 )
 from src.query_enhancement import generate_hypothetical_document
 from src.ranking.reranker import rerank
+from src.jit_mapper import identify_sections_to_embed
 
 ANSWER_NOT_FOUND = "I'm sorry, but I don't have enough information to answer that question."
 
@@ -339,6 +340,17 @@ def run_chat_session(args: argparse.Namespace, cfg: RAGConfig):
             q = input("\nAsk > ").strip()
             if not q: continue
             if q.lower() in {"exit", "quit"}: break
+
+            # JIT Section Mapping (Step 1)
+            jit_chunks, jit_pages = identify_sections_to_embed(
+                q, 
+                cfg.extracted_index_path, 
+                cfg.page_to_chunk_map_path
+            )
+            if jit_chunks:
+                print(f"JIT Mapping found related sections for query: '{q}'")
+                print(f"  Pages: {jit_pages}")
+                print(f"  Chunk IDs: {jit_chunks}")
 
             if args.partial and cfg.jit_indexing:
                 from src.local_partial_indexer import LocalPartialIndexer
