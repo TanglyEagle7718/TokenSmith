@@ -5,13 +5,13 @@ Query enhancement techniques for improved retrieval (use only one):
 """
 
 import textwrap
-from typing import Optional
-from src.generator import ANSWER_END, ANSWER_START, run_llama_cpp, text_cleaning
+from typing import Optional, Union, List
+from src.generator import ANSWER_END, ANSWER_START, run_llama_cpp, text_cleaning, AbstractGenerator
 
 
 def generate_hypothetical_document(
     query: str,
-    model_path: str,
+    generator_or_path: Union[str, AbstractGenerator],
     max_tokens: int = 100,
     **llm_kwargs
 ) -> str:
@@ -40,18 +40,27 @@ def generate_hypothetical_document(
         """)
     
     prompt = text_cleaning(prompt)
-    hypothetical = run_llama_cpp(
-        prompt,
-        model_path,
-        max_tokens=max_tokens,
-        **llm_kwargs
-    )
+    
+    if isinstance(generator_or_path, AbstractGenerator):
+        if hasattr(generator_or_path, 'raw_completion'):
+            resp = generator_or_path.raw_completion(prompt, max_tokens, **llm_kwargs)
+            hypothetical = resp["choices"][0]["text"]
+        else:
+            hypothetical = "".join(generator_or_path.stream(query="", chunks=[], max_tokens=max_tokens, **llm_kwargs))
+    else:
+        hypothetical_resp = run_llama_cpp(
+            prompt,
+            generator_or_path,
+            max_tokens=max_tokens,
+            **llm_kwargs
+        )
+        hypothetical = hypothetical_resp["choices"][0]["text"]
     
     return hypothetical.strip()
 
 def correct_query_grammar(
     query: str,
-    model_path: str,
+    generator_or_path: Union[str, AbstractGenerator],
     **llm_kwargs
 ) -> str:
     """
@@ -70,16 +79,24 @@ def correct_query_grammar(
         """)
 
     prompt = text_cleaning(prompt)
-    corrected_query = run_llama_cpp(
-        prompt,
-        model_path,
-        max_tokens=len(query.split()) * 2,
-        temperature=0,
-        **llm_kwargs
-    )
+    
+    if isinstance(generator_or_path, AbstractGenerator):
+        if hasattr(generator_or_path, 'raw_completion'):
+            resp = generator_or_path.raw_completion(prompt, max_tokens=len(query.split()) * 2, temperature=0, **llm_kwargs)
+            cleaned = resp["choices"][0]["text"].strip()
+        else:
+            cleaned = "".join(generator_or_path.stream(query="", chunks=[], max_tokens=len(query.split()) * 2, temperature=0, **llm_kwargs)).strip()
+    else:
+        corrected_query = run_llama_cpp(
+            prompt,
+            generator_or_path,
+            max_tokens=len(query.split()) * 2,
+            temperature=0,
+            **llm_kwargs
+        )
+        cleaned = corrected_query["choices"][0]["text"].strip()
 
     # If model returns empty or hallucinated long text, return original
-    cleaned = corrected_query["choices"][0]["text"].strip()
     if not cleaned or len(cleaned) > len(query) * 2:
         return query
 
@@ -87,10 +104,10 @@ def correct_query_grammar(
 
 def expand_query_with_keywords(
     query: str,
-    model_path: str,
+    generator_or_path: Union[str, AbstractGenerator],
     max_tokens: int = 64,
     **llm_kwargs
-) -> str:
+) -> List[str]:
     """
     Query Expansion: Generates related keywords and synonyms.
     This helps retrieval when the user uses different vocabulary than the documents.
@@ -108,17 +125,26 @@ def expand_query_with_keywords(
         """)
 
     prompt = text_cleaning(prompt)
-    expansion = run_llama_cpp(
-        prompt,
-        model_path,
-        max_tokens=max_tokens,
-        temperature=0.5,
-        **llm_kwargs
-    )
+    
+    if isinstance(generator_or_path, AbstractGenerator):
+        if hasattr(generator_or_path, 'raw_completion'):
+            resp = generator_or_path.raw_completion(prompt, max_tokens=max_tokens, temperature=0.5, **llm_kwargs)
+            expansion_text = resp["choices"][0]["text"]
+        else:
+            expansion_text = "".join(generator_or_path.stream(query="", chunks=[], max_tokens=max_tokens, temperature=0.5, **llm_kwargs))
+    else:
+        expansion = run_llama_cpp(
+            prompt,
+            generator_or_path,
+            max_tokens=max_tokens,
+            temperature=0.5,
+            **llm_kwargs
+        )
+        expansion_text = expansion["choices"][0]["text"]
 
     # Combine original query with expansion
     query_lines = [query]
-    query_lines.extend([line.strip() for line in expansion["choices"][0]["text"].split('\n') if line.strip()])
+    query_lines.extend([line.strip() for line in expansion_text.split('\n') if line.strip()])
 
     # Remove numbering if present
     query_lines = [line.split('.', 1)[-1].strip() if '.' in line[:3] else line for line in query_lines]
@@ -128,9 +154,9 @@ def expand_query_with_keywords(
 
 def decompose_complex_query(
     query: str,
-    model_path: str,
+    generator_or_path: Union[str, AbstractGenerator],
     **llm_kwargs
-) -> list[str]:
+) -> List[str]:
     """
     Breaks a complex multi-part question into sub-questions.
     Useful for tasks where a single retrieval might miss some parts of the answer.
@@ -148,15 +174,24 @@ def decompose_complex_query(
         """)
 
     prompt = text_cleaning(prompt)
-    output = run_llama_cpp(
-        prompt,
-        model_path,
-        max_tokens=128,
-        temperature=0.0,
-        **llm_kwargs
-    )
+    
+    if isinstance(generator_or_path, AbstractGenerator):
+        if hasattr(generator_or_path, 'raw_completion'):
+            resp = generator_or_path.raw_completion(prompt, max_tokens=128, temperature=0.0, **llm_kwargs)
+            output_text = resp["choices"][0]["text"]
+        else:
+            output_text = "".join(generator_or_path.stream(query="", chunks=[], max_tokens=128, temperature=0.0, **llm_kwargs))
+    else:
+        output = run_llama_cpp(
+            prompt,
+            generator_or_path,
+            max_tokens=128,
+            temperature=0.0,
+            **llm_kwargs
+        )
+        output_text = output["choices"][0]["text"]
 
-    sub_questions = [line.strip() for line in output["choices"][0]["text"].split('\n') if line.strip()]
+    sub_questions = [line.strip() for line in output_text.split('\n') if line.strip()]
 
     # Remove numbering if present
     sub_questions = [line.split('.', 1)[-1].strip() if '.' in line[:3] else line for line in sub_questions]
@@ -165,8 +200,8 @@ def decompose_complex_query(
 
 def contextualize_query(
     query: str,
-    history: list[dict],
-    model_path: str,
+    history: List[dict],
+    generator_or_path: Union[str, AbstractGenerator],
     max_tokens: int = 128,
     **llm_kwargs
 ) -> str:
@@ -219,15 +254,22 @@ def contextualize_query(
         """)
 
     prompt = text_cleaning(prompt)
-    output = run_llama_cpp(
-        prompt,
-        model_path,
-        max_tokens=max_tokens,
-        temperature=0.1,
-        **llm_kwargs
-    )
-
-    rewritten = output["choices"][0]["text"].strip()
+    
+    if isinstance(generator_or_path, AbstractGenerator):
+        if hasattr(generator_or_path, 'raw_completion'):
+            resp = generator_or_path.raw_completion(prompt, max_tokens, temperature=0.1, **llm_kwargs)
+            rewritten = resp["choices"][0]["text"].strip()
+        else:
+            rewritten = "".join(generator_or_path.stream(query="", chunks=[], max_tokens=max_tokens, temperature=0.1, **llm_kwargs)).strip()
+    else:
+        output = run_llama_cpp(
+            prompt,
+            generator_or_path,
+            max_tokens=max_tokens,
+            temperature=0.1,
+            **llm_kwargs
+        )
+        rewritten = output["choices"][0]["text"].strip()
     
     # If model hallucinates or errors, fall back to original query
     if not rewritten or len(rewritten) > len(query) * 2:

@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.config import RAGConfig
-from src.generator import answer
+from src.generator import AbstractGenerator
 from src.feedback_store import (
     init_feedback_db,
     save_answer,
@@ -388,6 +388,22 @@ async def chat_stream(request: ChatRequest):
     if not _config.gen_model:
         raise HTTPException(status_code=500, detail="Model path not configured.")
 
+    # Initialize generator
+    try:
+        if _config.cloud:
+            from src.generator.cloud_generator import CloudGenerator
+            gen = CloudGenerator(
+                model_name=_config.gen_model,
+                api_key=_config.openai_api_key,
+                base_url=_config.openai_base_url
+            )
+        else:
+            from src.generator.local_generator import LocalGenerator
+            gen = LocalGenerator(model_path=_config.gen_model)
+    except Exception as e:
+        print(f"Error initializing generator: {e}")
+        raise HTTPException(status_code=500, detail=f"Error initializing generator: {e}")
+
     answer_id = str(uuid4())
     session_id = request.session_id or str(uuid4())
     
@@ -411,8 +427,8 @@ async def chat_stream(request: ChatRequest):
             yield f"data: {json.dumps({'type': 'chunks_by_page', 'content': chunks_by_page})}\n\n"
 
             # Stream generation token by token
-            for delta in answer(request.query, ranked_chunks, _config.gen_model,
-                              _config.max_gen_tokens, system_prompt_mode=prompt_type, temperature=temperature):
+            for delta in gen.stream(request.query, ranked_chunks,
+                                  _config.max_gen_tokens, system_prompt_mode=prompt_type, temperature=temperature):
                 if delta:
                     full_response_accumulator.append(delta) # Capture for log
                     yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
@@ -526,17 +542,30 @@ async def chat(request: ChatRequest):
         if not _config.gen_model:
             raise HTTPException(status_code=500, detail="Model path not configured.")
 
+        # Initialize generator
+        try:
+            if _config.cloud:
+                from src.generator.cloud_generator import CloudGenerator
+                gen = CloudGenerator(
+                    model_name=_config.gen_model,
+                    api_key=_config.openai_api_key,
+                    base_url=_config.openai_base_url
+                )
+            else:
+                from src.generator.local_generator import LocalGenerator
+                gen = LocalGenerator(model_path=_config.gen_model)
+        except Exception as e:
+            print(f"Error initializing generator: {e}")
+            raise HTTPException(status_code=500, detail=f"Error initializing generator: {e}")
+
         # 3. Full Generation
         try:
-            answer_text = "".join(
-                answer(
-                    request.query,
-                    ranked_chunks,
-                    _config.gen_model,
-                    _config.max_gen_tokens,
-                    system_prompt_mode=prompt_type,
-                    temperature=temperature,
-                )
+            answer_text = gen.generate(
+                request.query,
+                ranked_chunks,
+                _config.max_gen_tokens,
+                system_prompt_mode=prompt_type,
+                temperature=temperature,
             )
         except Exception as gen_error:
             print(f"Generation failed: {str(gen_error)}")
