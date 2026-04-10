@@ -8,14 +8,14 @@ def test_extract_no_pdfs_exits_with_error(tmp_path, monkeypatch, capsys):
     (tmp_path / "data" / "chapters").mkdir(parents=True)
 
     with pytest.raises(SystemExit) as exc:
-        extraction.main()
+        extraction.main(project_root=tmp_path)
 
     # if no PDFs found, exit code should be 1
     assert exc.value.code == 1
     captured = capsys.readouterr()
 
     # error prints to stderr
-    assert "No PDFs found in data/chapters/" in (captured.err + captured.out)
+    assert "No PDFs found in" in (captured.err + captured.out)
 
 def test_extract_single_pdf_creates_one_md(tmp_path, monkeypatch):
     # Create temporary data/chapters/ with one PDF
@@ -34,7 +34,7 @@ def test_extract_single_pdf_creates_one_md(tmp_path, monkeypatch):
     # Replace the real conversion function
     monkeypatch.setattr(extraction, "convert_and_save_with_page_numbers", fake_convert)
 
-    extraction.main()
+    extraction.main(project_root=tmp_path)
 
     # Assert
     out_md = tmp_path / "data" / "Textbook--extracted_markdown.md"
@@ -66,7 +66,7 @@ def test_extract_multiple_pdfs_creates_matching_mds(tmp_path, monkeypatch):
     # Replace the real conversion function
     monkeypatch.setattr(extraction, "convert_and_save_with_page_numbers", fake_convert)
 
-    extraction.main()
+    extraction.main(project_root=tmp_path)
 
     # Assert
     expected = [

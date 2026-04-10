@@ -12,7 +12,6 @@ from copy import deepcopy
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 import traceback
-import os
 
 # Add project root to Python path to allow imports when run directly
 _project_root = pathlib.Path(__file__).resolve().parent.parent
@@ -25,7 +24,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.config import RAGConfig
-from src.generator import AbstractGenerator
 from src.feedback_store import (
     init_feedback_db,
     save_answer,

@@ -2,7 +2,7 @@
 import re
 import textwrap
 from abc import ABC, abstractmethod
-from typing import List, Union, Optional, Generator
+from typing import List, Union, Generator
 
 class AbstractGenerator(ABC):
     """

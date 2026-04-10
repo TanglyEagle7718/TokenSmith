@@ -404,13 +404,16 @@ class TestGeneratorAPI:
 
     def test_get_generator_factory(self):
         """get_generator returns correct generator type."""
-        from src.generator import get_generator, LocalGenerator, CloudGenerator
+        from src.generator import get_generator
         
-        local_gen = get_generator("models/qwen.gguf")
-        assert isinstance(local_gen, LocalGenerator)
-        
-        cloud_gen = get_generator("gpt-4")
-        assert isinstance(cloud_gen, CloudGenerator)
+        with patch('src.generator.LocalGenerator') as MockLocal, \
+             patch('src.generator.CloudGenerator') as MockCloud:
+            
+            local_gen = get_generator("models/qwen.gguf")
+            MockLocal.assert_called_once()
+            
+            cloud_gen = get_generator("gpt-4")
+            MockCloud.assert_called_once()
 
 
 # ====================== Chunking Tests ======================

@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from src.config import RAGConfig
-from src.generator import get_generator, AbstractGenerator
+from src.generator import AbstractGenerator, answer
 from src.index_builder import build_index
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
@@ -201,24 +201,6 @@ def get_answer(
     system_prompt = args.system_prompt_mode or cfg.system_prompt_mode
     use_double = getattr(args, "double_prompt", False) or cfg.use_double_prompt
 
-    # Initialize generator
-    try:
-        if cfg.cloud:
-            from src.generator.cloud_generator import CloudGenerator
-            gen = CloudGenerator(
-                model_name=model_path,
-                api_key=cfg.openai_api_key,
-                base_url=cfg.openai_base_url
-            )
-        else:
-            from src.generator.local_generator import LocalGenerator
-            gen = LocalGenerator(model_path=model_path)
-    except Exception as e:
-        error_msg = f"Error initializing generator: {e}"
-        if console:
-            console.print(f"\n[bold red]{error_msg}[/bold red]\n")
-        return error_msg
-
     if use_double:
         # For double answer, we still use the helper in src.generator 
         # but we need to pass the generator instance or update the helper.
@@ -232,12 +214,14 @@ def get_answer(
             system_prompt_mode=system_prompt,
         )
     else:
-        stream_iter = gen.stream(
+        stream_iter = answer(
             question,
             ranked_chunks,
+            model_path,
             max_tokens=cfg.max_gen_tokens,
             system_prompt_mode=system_prompt,
         )
+
 
     if is_test_mode:
         # We do not render MD in the test mode

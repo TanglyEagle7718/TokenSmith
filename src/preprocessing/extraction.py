@@ -1,7 +1,7 @@
 from pathlib import Path
 import re
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional, Union
 import sys
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption, InputFormat
@@ -243,27 +243,31 @@ def preprocess_extracted_section(text: str) -> str:
     return cleaned_text
 
 
-def main():
-    # Returns all pdf files under data/chapters/
-    project_root = Path(__file__).resolve().parent.parent.parent
+def main(project_root: Optional[Path] = None):
+    # If project_root is not provided, derive it from the file's location
+    if project_root is None:
+        project_root = Path(__file__).resolve().parent.parent.parent
+
     chapters_dir = project_root / "data/chapters"
     pdfs = sorted(chapters_dir.glob("*.pdf"))
 
     # Ensure at least one PDF is found
     if len(pdfs) == 0:
-        print("ERROR: No PDFs found in data/chapters/. Please copy a PDF there first.", file=sys.stderr)
+        print(f"ERROR: No PDFs found in {chapters_dir}. Please copy a PDF there first.", file=sys.stderr)
         sys.exit(1)
 
     # Convert each PDF to Markdown
     markdown_files = []
     for pdf_path in pdfs:
         pdf_name = pdf_path.stem
-        output_md = Path("data") / f"{pdf_name}--extracted_markdown.md"
+        # The output markdown will be in the project root's 'data' directory.
+        output_markdown_path = project_root / "data" / f"{pdf_name}--extracted_markdown.md"
 
-        print(f"Converting '{pdf_path}' to '{output_md}'...")
-        convert_and_save_with_page_numbers(str(pdf_path), str(output_md))
 
-        markdown_files.append(output_md)
+        print(f"Converting '{pdf_path}' to '{output_markdown_path}'...")
+        convert_and_save_with_page_numbers(str(pdf_path), str(output_markdown_path))
+
+        markdown_files.append(output_markdown_path)
 
     # TODO: Add logic to select which markdown file to process
     extracted_sections = extract_sections_from_markdown(markdown_files[0])
