@@ -166,6 +166,7 @@ class TestChatEndpoint:
         mock_config.temperature = 0.2
         mock_config.max_gen_tokens = 300
         mock_config.gen_model = "mock_model.gguf"
+        mock_config.cloud = False
 
         # Create mock artifacts
         mock_artifacts = {
@@ -250,21 +251,20 @@ class TestChatEndpoint:
 
     @patch('src.api_server.update_user_topic_state')
     @patch('src.api_server.save_answer')
-    @patch('src.api_server.answer')
-    def test_chat_success(self, mock_answer, mock_save, mock_update, mock_server_state):
+    @patch('src.generator.local_generator.LocalGenerator')
+    def test_chat_success(self, mock_gen_class, mock_save, mock_update, mock_server_state):
         """Chat endpoint returns successful response."""
         from fastapi.testclient import TestClient
         from src.api_server import app
 
-        # Mock the answer generator
-        mock_answer.return_value = iter(["This ", "is ", "the ", "answer."])
+        # Mock the generator instance
+        mock_gen = mock_gen_class.return_value
+        mock_gen.generate.return_value = "This is the answer."
 
         with patch('src.api_server.lifespan'):
             client = TestClient(app, raise_server_exceptions=False)
             response = client.post("/api/chat", json={"query": "What is a database?"})
 
-        print("Response JSON:")
-        print(response.json())
         assert response.status_code == 200
         data = response.json()
         assert "answer" in data
@@ -274,13 +274,14 @@ class TestChatEndpoint:
 
     @patch('src.api_server.update_user_topic_state')
     @patch('src.api_server.save_answer')
-    @patch('src.api_server.answer')
-    def test_chat_with_custom_params(self, mock_answer, mock_save, mock_update, mock_server_state):
+    @patch('src.generator.local_generator.LocalGenerator')
+    def test_chat_with_custom_params(self, mock_gen_class, mock_save, mock_update, mock_server_state):
         """Chat endpoint respects custom parameters."""
         from fastapi.testclient import TestClient
         from src.api_server import app
 
-        mock_answer.return_value = iter(["Answer"])
+        mock_gen = mock_gen_class.return_value
+        mock_gen.generate.return_value = "Answer"
 
         with patch('src.api_server.lifespan'):
             client = TestClient(app, raise_server_exceptions=False)
@@ -293,21 +294,22 @@ class TestChatEndpoint:
             })
 
         assert response.status_code == 200
-        # Verify answer was called with custom parameters
-        mock_answer.assert_called_once()
-        call_args = mock_answer.call_args
+        # Verify generate was called with custom parameters
+        mock_gen.generate.assert_called_once()
+        call_args = mock_gen.generate.call_args
         assert call_args[1]["system_prompt_mode"] == "tutor"
         assert call_args[1]["temperature"] == 0.5
 
     @patch('src.api_server.update_user_topic_state')
     @patch('src.api_server.save_answer')
-    @patch('src.api_server.answer')
-    def test_chat_disable_chunks(self, mock_answer, mock_save, mock_update, mock_server_state):
+    @patch('src.generator.local_generator.LocalGenerator')
+    def test_chat_disable_chunks(self, mock_gen_class, mock_save, mock_update, mock_server_state):
         """Chat endpoint works with chunks disabled."""
         from fastapi.testclient import TestClient
         from src.api_server import app
 
-        mock_answer.return_value = iter(["No context answer"])
+        mock_gen = mock_gen_class.return_value
+        mock_gen.generate.return_value = "No context answer"
 
         with patch('src.api_server.lifespan'):
             client = TestClient(app, raise_server_exceptions=False)
@@ -323,14 +325,15 @@ class TestChatEndpoint:
 
     @patch('src.api_server.update_user_topic_state')
     @patch('src.api_server.save_answer')
-    @patch('src.api_server.answer')
-    def test_chat_generation_error_handled(self, mock_answer, mock_save, mock_update, mock_server_state):
+    @patch('src.generator.local_generator.LocalGenerator')
+    def test_chat_generation_error_handled(self, mock_gen_class, mock_save, mock_update, mock_server_state):
         """Chat endpoint handles generation errors gracefully."""
         from fastapi.testclient import TestClient
         from src.api_server import app
 
         # Simulate generation error
-        mock_answer.side_effect = Exception("Model loading failed")
+        mock_gen = mock_gen_class.return_value
+        mock_gen.generate.side_effect = Exception("Model loading failed")
 
         with patch('src.api_server.lifespan'):
             client = TestClient(app, raise_server_exceptions=False)
@@ -453,6 +456,7 @@ class TestStreamingEndpoint:
         mock_config.temperature = 0.2
         mock_config.max_gen_tokens = 300
         mock_config.gen_model = "mock_model.gguf"
+        mock_config.cloud = False
 
         mock_artifacts = {
             "chunks": ["chunk0", "chunk1", "chunk2"],
@@ -502,15 +506,16 @@ class TestStreamingEndpoint:
 
         assert response.status_code == 400
 
-    @patch('src.api_server.answer')
+    @patch('src.generator.local_generator.LocalGenerator')
     @patch('src.api_server.get_page_numbers')
-    def test_stream_returns_sse(self, mock_page_nums, mock_answer, mock_server_state):
+    def test_stream_returns_sse(self, mock_page_nums, mock_gen_class, mock_server_state):
         """Stream endpoint returns Server-Sent Events format."""
         from fastapi.testclient import TestClient
         from src.api_server import app
 
         mock_page_nums.return_value = {0: 10, 1: 20, 2: 30}
-        mock_answer.return_value = iter(["Hello", " world"])
+        mock_gen = mock_gen_class.return_value
+        mock_gen.stream.return_value = iter(["Hello", " world"])
 
         with patch('src.api_server.lifespan'):
             client = TestClient(app, raise_server_exceptions=False)
@@ -608,6 +613,7 @@ class TestAPIIntegration:
         mock_config.temperature = 0.2
         mock_config.max_gen_tokens = 100
         mock_config.gen_model = "test_model.gguf"
+        mock_config.cloud = False
 
         mock_artifacts = {
             "chunks": [f"Chunk content {i}" for i in range(5)],
@@ -650,17 +656,14 @@ class TestAPIIntegration:
 
     @patch('src.api_server.update_user_topic_state')
     @patch('src.api_server.save_answer')
-    @patch('src.api_server.answer')
-    def test_full_chat_flow(self, mock_answer, mock_save, mock_update, full_mock_state):
+    @patch('src.generator.local_generator.LocalGenerator')
+    def test_full_chat_flow(self, mock_gen_class, mock_save, mock_update, full_mock_state):
         """Test complete chat flow from request to response."""
         from fastapi.testclient import TestClient
         from src.api_server import app
 
-        mock_answer.return_value = iter([
-            "A database is ",
-            "a structured collection ",
-            "of data."
-        ])
+        mock_gen = mock_gen_class.return_value
+        mock_gen.generate.return_value = "A database is a structured collection of data."
 
         with patch('src.api_server.lifespan'):
             client = TestClient(app, raise_server_exceptions=False)

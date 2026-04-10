@@ -32,6 +32,9 @@ class RAGConfig:
     # generation
     max_gen_tokens: int = 400
     gen_model: str = "models/qwen2.5-3b-instruct-q8_0.gguf"
+    cloud: bool = False
+    openai_api_key: str = ""
+    openai_base_url: str = ""
     
     # testing
     system_prompt_mode: str = "baseline"

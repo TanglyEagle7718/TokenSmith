@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from src.config import RAGConfig
-from src.generator import answer, double_answer, dedupe_generated_text
+from src.generator import get_generator, AbstractGenerator
 from src.index_builder import build_index
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
@@ -199,10 +199,31 @@ def get_answer(
     # Step 4: Generation
     model_path = cfg.gen_model
     system_prompt = args.system_prompt_mode or cfg.system_prompt_mode
-
     use_double = getattr(args, "double_prompt", False) or cfg.use_double_prompt
 
+    # Initialize generator
+    try:
+        if cfg.cloud:
+            from src.generator.cloud_generator import CloudGenerator
+            gen = CloudGenerator(
+                model_name=model_path,
+                api_key=cfg.openai_api_key,
+                base_url=cfg.openai_base_url
+            )
+        else:
+            from src.generator.local_generator import LocalGenerator
+            gen = LocalGenerator(model_path=model_path)
+    except Exception as e:
+        error_msg = f"Error initializing generator: {e}"
+        if console:
+            console.print(f"\n[bold red]{error_msg}[/bold red]\n")
+        return error_msg
+
     if use_double:
+        # For double answer, we still use the helper in src.generator 
+        # but we need to pass the generator instance or update the helper.
+        # Actually, let's just use the helper from src.generator which we updated.
+        from src.generator import double_answer
         stream_iter = double_answer(
             question,
             ranked_chunks,
@@ -211,10 +232,9 @@ def get_answer(
             system_prompt_mode=system_prompt,
         )
     else:
-        stream_iter = answer(
+        stream_iter = gen.stream(
             question,
             ranked_chunks,
-            model_path,
             max_tokens=cfg.max_gen_tokens,
             system_prompt_mode=system_prompt,
         )
@@ -224,7 +244,7 @@ def get_answer(
         ans = ""
         for delta in stream_iter:
             ans += delta
-        ans = dedupe_generated_text(ans)
+        ans = AbstractGenerator.dedupe_generated_text(ans)
         return ans, chunks_info, hyde_query
     else:
         # Accumulate the full text while rendering incremental Markdown chunks
@@ -261,7 +281,7 @@ def render_streaming_ans(console, stream_iter):
                 is_first = False
             ans += delta
             live.update(Markdown(ans))
-    ans = dedupe_generated_text(ans)
+    ans = AbstractGenerator.dedupe_generated_text(ans)
     live.update(Markdown(ans))
     console.print("\n[bold cyan]=== END OF ANSWER ===[/bold cyan]\n")
     return ans
