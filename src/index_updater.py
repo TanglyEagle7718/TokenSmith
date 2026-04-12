@@ -8,6 +8,7 @@ import os
 import pickle
 import pathlib
 import json
+import re
 from typing import List, Dict, Optional
 
 import faiss
@@ -43,6 +44,7 @@ def add_to_index(
     sources_path = artifacts_dir / f"{index_prefix}_sources.pkl"
     meta_path = artifacts_dir / f"{index_prefix}_meta.pkl"
     info_path = artifacts_dir / f"{index_prefix}_info.json"
+    map_path = artifacts_dir / f"{index_prefix}_page_to_chunk_map.json"
 
     if not faiss_index_path.exists():
         print("No existing index found. Building a new one...")
@@ -71,12 +73,25 @@ def add_to_index(
     with open(info_path, "r") as f:
         index_info = json.load(f)
     
-    existing_chapters = index_info.get("chapters", [])
+    if map_path.exists():
+        with open(map_path, "r") as f:
+            page_to_chunk_ids = {int(k): set(v) for k, v in json.load(f).items()}
+    else:
+        page_to_chunk_ids = {}
+
+    target_textbook = next((t for t in index_info["textbooks"] if t["markdown_file"] == markdown_file), None)
+    
+    if target_textbook:
+        existing_chapters = target_textbook.get("chapters", [])
+    else:
+        existing_chapters = []
+    
     if "all" in existing_chapters:
         print("Index contains all chapters. No new chapters to add.")
         return
 
     chapters_to_index = list(set(chapters_to_add) - set(existing_chapters))
+
     if not chapters_to_index:
         print("All requested chapters are already in the index.")
         return
@@ -98,12 +113,12 @@ def add_to_index(
     
     total_chunks = len(existing_chunks)
     current_page = max([m.get('page_number', 1) for m in existing_metadata]) if existing_metadata else 1
+    heading_stack = []
 
     # Process new sections
     for i, c in enumerate(new_sections):
         current_level = c.get('level', 1)
         chapter_num = c.get('chapter', 0)
-        heading_stack = []
 
         while heading_stack and heading_stack[-1][0] >= current_level:
             heading_stack.pop()
@@ -114,71 +129,108 @@ def add_to_index(
         path_list = [h[1] for h in heading_stack]
         full_section_path = " ".join(path_list)
         full_section_path = f"Chapter {chapter_num} " + full_section_path
+    sub_chunks = chunker.chunk(c['content'])
+    page_pattern = re.compile(r'--- Page (\d+) ---')
 
-        sub_chunks = chunker.chunk(c['content'])
+    for sub_chunk_id, sub_chunk in enumerate(sub_chunks):
+        chunk_pages = set()
+        fragments = page_pattern.split(sub_chunk)
+        current_chunk_global_id = total_chunks + len(new_chunks)
 
-        for sub_chunk_id, sub_chunk in enumerate(sub_chunks):
-            clean_chunk = sub_chunk.strip()
-            
-            if c["heading"] == "Introduction":
+        # If there is content before the first page marker, it belongs to the current_page.
+        if fragments[0].strip():
+            page_to_chunk_ids.setdefault(current_page, set()).add(current_chunk_global_id)
+            chunk_pages.add(current_page)
+
+        # Process new pages found within this sub_chunk.
+        for j in range(1, len(fragments), 2):
+            try:
+                new_page = int(fragments[j]) + 1
+                if fragments[j+1].strip():
+                    page_to_chunk_ids.setdefault(new_page, set()).add(current_chunk_global_id)
+                    chunk_pages.add(new_page)
+                current_page = new_page
+            except (IndexError, ValueError):
                 continue
-            
-            meta = {
-                "filename": markdown_file,
-                "mode": chunk_config.to_string(),
-                "char_len": len(clean_chunk),
-                "word_len": len(clean_chunk.split()),
-                "section": c['heading'],
-                "section_path": full_section_path,
-                "text_preview": clean_chunk[:100],
-                "page_number": current_page, # This is a simplification, page numbers will be off
-                "chunk_id": total_chunks + len(new_chunks)
-            }
 
-            if use_headings:
-                chunk_prefix = f"Description: {full_section_path} Content: "
-            else:
-                chunk_prefix = ""
+        # Clean sub_chunk by removing page markers
+        clean_chunk = re.sub(page_pattern, '', sub_chunk).strip()
 
-            new_chunks.append(chunk_prefix + clean_chunk)
-            new_sources.append(markdown_file)
-            new_metadata.append(meta)
+        if c["heading"] == "Introduction":
+            continue
 
-    # Embed new chunks
-    print(f"Embedding {len(new_chunks)} new chunks...")
-    embedder = SentenceTransformer(embedding_model_path)
-    new_embeddings = embedder.encode(new_chunks, batch_size=4, show_progress_bar=True)
+        meta = {
+            "filename": markdown_file,
+            "mode": chunk_config.to_string(),
+            "char_len": len(clean_chunk),
+            "word_len": len(clean_chunk.split()),
+            "section": c['heading'],
+            "section_path": full_section_path,
+            "text_preview": clean_chunk[:100],
+            "page_numbers": sorted(list(chunk_pages)),
+            "chunk_id": current_chunk_global_id
+        }
 
-    # Add to FAISS index
-    faiss_index = faiss.read_index(str(faiss_index_path))
-    faiss_index.add(new_embeddings)
-    faiss.write_index(faiss_index, str(faiss_index_path))
-    print("Updated FAISS index.")
+        if use_headings:
+            chunk_prefix = f"Description: {full_section_path} Content: "
+        else:
+            chunk_prefix = ""
 
-    # Update other artifacts
-    all_chunks = existing_chunks + new_chunks
-    all_sources = existing_sources + new_sources
-    all_metadata = existing_metadata + new_metadata
+        new_chunks.append(chunk_prefix + clean_chunk)
+        new_sources.append(markdown_file)
+        new_metadata.append(meta)
 
-    # Re-build BM25 index
-    print("Re-building BM25 index...")
-    tokenized_chunks = [preprocess_for_bm25(chunk) for chunk in all_chunks]
-    bm25_index = BM25Okapi(tokenized_chunks)
-    with open(bm25_index_path, "wb") as f:
-        pickle.dump(bm25_index, f)
-    print("Updated BM25 index.")
+        # Embed new chunks
+        print(f"Embedding {len(new_chunks)} new chunks...")
+        embedder = SentenceTransformer(embedding_model_path)
+        new_embeddings = embedder.encode(new_chunks, batch_size=4, show_progress_bar=True)
 
-    # Save updated artifacts
-    with open(chunks_path, "wb") as f:
-        pickle.dump(all_chunks, f)
-    with open(sources_path, "wb") as f:
-        pickle.dump(all_sources, f)
-    with open(meta_path, "wb") as f:
-        pickle.dump(all_metadata, f)
+        # Add to FAISS index
+        faiss_index = faiss.read_index(str(faiss_index_path))
+        faiss_index.add(new_embeddings)
+        faiss.write_index(faiss_index, str(faiss_index_path))
+        print("Updated FAISS index.")
 
-    # Update index info
-    index_info["chapters"] = sorted(list(set(existing_chapters + chapters_to_index)))
-    with open(info_path, "w") as f:
-        json.dump(index_info, f, indent=2)
+        # Update other artifacts
+        all_chunks = existing_chunks + new_chunks
+        all_sources = existing_sources + new_sources
+        all_metadata = existing_metadata + new_metadata
 
-    print(f"Successfully added {len(new_chunks)} new chunks for chapters {chapters_to_index}.")
+        # Re-build BM25 index
+        print("Re-building BM25 index...")
+        tokenized_chunks = [preprocess_for_bm25(chunk) for chunk in all_chunks]
+        bm25_index = BM25Okapi(tokenized_chunks)
+        with open(bm25_index_path, "wb") as f:
+            pickle.dump(bm25_index, f)
+        print("Updated BM25 index.")
+
+        # Save updated artifacts
+        with open(chunks_path, "wb") as f:
+            pickle.dump(all_chunks, f)
+        with open(sources_path, "wb") as f:
+            pickle.dump(all_sources, f)
+        with open(meta_path, "wb") as f:
+            pickle.dump(all_metadata, f)
+
+        # Save updated page-to-chunk map
+        final_map = {str(page): sorted(list(id_set)) for page, id_set in page_to_chunk_ids.items()}
+        with open(map_path, "w") as f:
+            json.dump(final_map, f, indent=2)
+        print(f"Updated page to chunk ID map: {map_path}")
+
+        # Update index info
+        updated_chapters = sorted(list(set(existing_chapters + chapters_to_index)))
+        if target_textbook:
+            target_textbook["chapters"] = updated_chapters
+            target_textbook["status"] = "partial" if "all" not in updated_chapters else "full"
+        else:
+            index_info["textbooks"].append({
+                "markdown_file": markdown_file,
+                "chapters": updated_chapters,
+                "status": "partial" if "all" not in updated_chapters else "full"
+            })
+        
+        with open(info_path, "w") as f:
+            json.dump(index_info, f, indent=2)
+
+        print(f"Successfully added {len(new_chunks)} new chunks for chapters {chapters_to_index}.")

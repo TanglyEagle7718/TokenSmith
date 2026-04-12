@@ -232,9 +232,13 @@ def build_index(
 
     output_file = artifacts_dir / f"{index_prefix}_info.json"
     index_info = {
-        "status": "indexed",
-        "documents": [markdown_file],
-        "chapters": chapters_to_index if chapters_to_index else ["all"]
+        "textbooks": [
+            {
+                "markdown_file": markdown_file,
+                "chapters": chapters_to_index if chapters_to_index else ["all"],
+                "status": "partial" if chapters_to_index else "full"
+            }
+        ]
     }
     with open(output_file, "w") as f:
         json.dump(index_info, f, indent=2)

@@ -99,12 +99,14 @@ class RAGConfig:
 
         if partial:
             target_dir = partial_dir
+            print("Using partial directory (change partial to false in config.yaml to use full directory)")
         else:
             # Fallback logic: use main if it exists, otherwise use partial if it exists
             if main_dir.exists():
                 target_dir = main_dir
             elif partial_dir.exists():
                 target_dir = partial_dir
+                print("Using partial directory (unable to find full directory)")
             else:
                 target_dir = main_dir
 

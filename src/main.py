@@ -89,8 +89,8 @@ def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
         return
 
     strategy = cfg.get_chunk_strategy()
-    chunker = DocumentChunker(strategy=strategy)
-    artifacts_dir = cfg.get_artifacts_directory(partial=args.partial)
+    chunker = DocumentChunker(strategy=strategy, keep_tables=args.keep_tables)
+    artifacts_dir = cfg.get_artifacts_directory(partial=True)
 
     add_to_index(
         markdown_file="data/silberschatz.md",
@@ -100,6 +100,7 @@ def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
         artifacts_dir=artifacts_dir,
         index_prefix=args.index_prefix,
         chapters_to_add=args.chapters,
+        use_headings=args.embed_with_headings,
     )
     print("Successfully added chapters to the index.")
 
