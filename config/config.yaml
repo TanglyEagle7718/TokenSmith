@@ -1,4 +1,4 @@
-embed_model: "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
+embed_model: "models/qwen3_embedding/Qwen.Qwen3-VL-Embedding-2B.Q5_K_M.gguf"
 top_k: 10
 num_candidates: 50
 ensemble_method: "rrf"
