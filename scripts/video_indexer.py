@@ -26,67 +26,55 @@ from src.preprocessing.chunking import DocumentChunker, SectionRecursiveStrategy
 class VideoIndexer:
     def __init__(
         self,
-        text_embedding_model_path: str,
+        text_embedding_model_path: Optional[str],
         multimodal_model_path: str,
         artifacts_dir: str = "index/partial_sections",
         index_prefix: str = "textbook_index",
         chunk_size: int = 500,
-        chunk_overlap: int = 50
+        chunk_overlap: int = 50,
+        use_mm_for_text: bool = False
     ):
         self.artifacts_dir = pathlib.Path(artifacts_dir)
         self.index_prefix = index_prefix
+        self.use_mm_for_text = use_mm_for_text
         
         # Initialize Chunker
         config = SectionRecursiveConfig(recursive_chunk_size=chunk_size, recursive_overlap=chunk_overlap)
         strategy = SectionRecursiveStrategy(config)
         self.chunker = DocumentChunker(strategy=strategy)
 
-        # Initialize models
-        print(f"Loading text embedding model from {text_embedding_model_path}...")
-        self.text_embedder = Llama(
-            model_path=text_embedding_model_path,
+        # Initialize multimodal model (used for frames, and optionally text)
+        print(f"Loading multimodal model from {multimodal_model_path}...")
+        self.multimodal_model = Llama(
+            model_path=multimodal_model_path,
             embedding=True,
             verbose=False,
             n_ctx=4096,
             n_gpu_layers=-1
         )
-        
-        print(f"Loading multimodal model from {multimodal_model_path}...")
-        # Placeholder for multimodal model loading (e.g. Qwen3-VL)
-        self.multimodal_model = None 
 
-    def extract_transcript(self, video_path: str) -> str:
-        """Transcribes the video audio."""
-        print(f"Transcribing {video_path}...")
-        # Placeholder for transcription logic (e.g. whisper)
-        return f"This is a placeholder transcript for {os.path.basename(video_path)}."
-
-    def extract_frames(self, video_path: str, interval_sec: int = 5) -> List[np.ndarray]:
-        """Extracts frames from the video at regular intervals."""
-        print(f"Extracting frames from {video_path} every {interval_sec} seconds...")
-        frames = []
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps == 0: fps = 30 # Fallback
-        interval_frames = int(fps * interval_sec)
-        
-        count = 0
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if count % interval_frames == 0:
-                frames.append(frame)
-            count += 1
-        cap.release()
-        return frames
+        # Initialize dedicated text model (if not using MM for text)
+        if not self.use_mm_for_text and text_embedding_model_path:
+            print(f"Loading dedicated text embedding model from {text_embedding_model_path}...")
+            self.text_embedder = Llama(
+                model_path=text_embedding_model_path,
+                embedding=True,
+                verbose=False,
+                n_ctx=4096,
+                n_gpu_layers=-1
+            )
+        else:
+            self.text_embedder = self.multimodal_model
 
     def embed_text(self, texts: List[str]) -> np.ndarray:
-        """Embeds a list of text strings."""
+        """Embeds a list of text strings using either the dedicated or MM model."""
         if not texts:
-            return np.array([], dtype=np.float32).reshape(0, 4096)
+            dim = self.text_embedder.n_embd() if hasattr(self.text_embedder, 'n_embd') else 4096
+            return np.array([], dtype=np.float32).reshape(0, dim)
+        
         embeddings = []
-        for text in tqdm(texts, desc="Embedding text"):
+        desc = "Embedding text (MM)" if self.use_mm_for_text else "Embedding text (Dedicated)"
+        for text in tqdm(texts, desc=desc):
             emb = self.text_embedder.create_embedding(text)['data'][0]['embedding']
             embeddings.append(emb)
         return np.array(embeddings, dtype=np.float32)
@@ -218,12 +206,14 @@ class VideoIndexer:
             )
 
 def main():
-    # Paths for the server (as requested, assuming they exist there)
+    # Paths for the server
     TEXT_MODEL = "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
-    MM_MODEL = "models/qwen3_embedding/qwen3_vl_model" # Placeholder
+    # Found in models/qwen3_embedding/Qwen.Qwen3-VL-Embedding-2B.Q5_K_M.gguf
+    MM_MODEL = "models/qwen3_embedding/Qwen.Qwen3-VL-Embedding-2B.Q5_K_M.gguf"
     VIDEO_DIR = "data/videos"
     
-    indexer = VideoIndexer(TEXT_MODEL, MM_MODEL)
+    # Example: Set use_mm_for_text=True to use the VL model for everything
+    indexer = VideoIndexer(TEXT_MODEL, MM_MODEL, use_mm_for_text=True)
     indexer.process_videos(VIDEO_DIR)
 
 if __name__ == "__main__":
