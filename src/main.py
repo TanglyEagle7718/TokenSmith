@@ -5,6 +5,7 @@ import argparse
 import json
 import pathlib
 import sys
+import uuid
 from typing import Dict, Optional, List, Tuple, Union, Any
 
 from rich.live import Live
@@ -15,6 +16,8 @@ from src.config import RAGConfig
 from src.generator import answer, dedupe_generated_text
 from src.index_builder import build_index
 from src.index_updater import add_to_index
+from src.audio_generator import generate_audio_response
+from src.video_indexer import VideoIndexer, preprocess_for_bm25
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
 from src.preprocessing.chunking import DocumentChunker
@@ -56,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
+    from src.index_builder import build_index
     strategy = cfg.get_chunk_strategy()
     chunker = DocumentChunker(strategy=strategy, keep_tables=args.keep_tables)
     artifacts_dir = cfg.get_artifacts_directory(partial=args.partial)
@@ -80,10 +84,12 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
         use_multiprocessing=args.multiproc_indexing,
         use_headings=args.embed_with_headings,
         chapters_to_index=args.chapters,
+        config=cfg,
     )
 
 def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
     """Handles the logic for adding chapters to an existing index."""
+    from src.index_updater import add_to_index
     if not args.chapters:
         print("Please provide a list of chapters to add using the --chapters argument.")
         return
@@ -93,7 +99,7 @@ def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
     artifacts_dir = cfg.get_artifacts_directory(partial=True)
 
     add_to_index(
-        markdown_file="data/silberschatz.md",
+        markdown_file="data/silbershatz.md",
         chunker=chunker,
         chunk_config=cfg.chunk_config,
         embedding_model_path=cfg.embed_model,
@@ -101,6 +107,7 @@ def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
         index_prefix=args.index_prefix,
         chapters_to_add=args.chapters,
         use_headings=args.embed_with_headings,
+        config=cfg,
     )
     print("Successfully added chapters to the index.")
 
@@ -151,6 +158,9 @@ def get_answer(
     # Step 1: Get chunks (golden, retrieved, or none)
     chunks_info = None
     hyde_query = None
+    is_audio_mode = question.startswith("@audio")
+    actual_query = question.replace("@audio", "").strip() if is_audio_mode else question
+
     if golden_chunks and cfg.use_golden_chunks:
         # Use provided golden chunks
         ranked_chunks = golden_chunks
@@ -206,16 +216,38 @@ def get_answer(
                 })
 
         # Step 3: Final re-ranking
-        ranked_chunks = rerank(question, ranked_chunks, mode=cfg.rerank_mode, top_n=cfg.rerank_top_k)
+        from src.ranking.reranker import rerank
+        # Create a mapping from content to original index to recover metadata after reranking
+        content_to_idx = {chunks[i]: i for i in topk_idxs}
+        
+        ranked_chunks = rerank(actual_query, ranked_chunks, mode=cfg.rerank_mode, top_n=cfg.rerank_top_k)
 
-    if not ranked_chunks and not cfg.disable_chunks:
-        console.print(f"\n{ANSWER_NOT_FOUND}\n")
-        return ANSWER_NOT_FOUND
+        # Augment chunks with source metadata for citation weaving
+        meta = artifacts.get("meta", [])
+        augmented_chunks = []
+        for content in ranked_chunks:
+            original_idx = content_to_idx.get(content)
+            if original_idx is not None and original_idx < len(meta):
+                m = meta[original_idx]
+                if m.get("type") == "video_transcript":
+                    source_info = f"SOURCE: Video {m.get('filename')}, {m.get('timestamp_sec')}s"
+                else:
+                    pages = m.get("page_numbers", [1])
+                    source_info = f"SOURCE: Textbook Page {pages}"
+                augmented_chunks.append(f"[{source_info}]\n{content}")
+            else:
+                augmented_chunks.append(content)
+        ranked_chunks = augmented_chunks
+
+        if not ranked_chunks and not cfg.disable_chunks:
+            console.print(f"\n{ANSWER_NOT_FOUND}\n")
+            return ANSWER_NOT_FOUND
 
     # 2. Generation
-    system_prompt = args.system_prompt_mode or cfg.system_prompt_mode,
+    system_prompt = "audio_script" if is_audio_mode else (args.system_prompt_mode or cfg.system_prompt_mode)
+    
     stream_iter = answer(
-        question, ranked_chunks, cfg.gen_model,
+        actual_query, ranked_chunks, cfg.gen_model,
         max_tokens=cfg.max_gen_tokens,
         system_prompt_mode=system_prompt
     )
@@ -231,8 +263,45 @@ def get_answer(
         # Accumulate the full text while rendering incremental Markdown chunks
         ans = render_streaming_ans(console, stream_iter)
 
-        # Logging
+        if is_audio_mode:
+            audio_filename = f"outputs/audio/response_{uuid.uuid4().hex}.wav"
+            console.print(f"\n[bold green]Generating audio response...[/bold green]")
+            audio_path = generate_audio_response(ans, audio_filename)
+            console.print(f"[bold green]Audio response saved to:[/bold green] {audio_path}\n")
+
+        # Video Citation Logic - Improved Selection
         meta = artifacts.get("meta", [])
+        video_candidates = []
+        for idx in topk_idxs:
+            if idx < len(meta):
+                m = meta[idx]
+                if m.get("type") in ["video_transcript", "video_frame", "video_title"]:
+                    video_candidates.append(m)
+        
+        video_citation = None
+        if video_candidates:
+            query_tokens = set(preprocess_for_bm25(question))
+            best_candidate = None
+            best_score = -1
+            
+            for cand in video_candidates:
+                filename = cand.get("filename", "")
+                name_tokens = set(preprocess_for_bm25(filename.replace(".mp4", "")))
+                overlap = len(query_tokens.intersection(name_tokens))
+                
+                score = overlap
+                
+                if score > best_score:
+                    best_score = score
+                    best_candidate = cand
+            
+            if best_candidate:
+                video_citation = f"{best_candidate.get('filename')} (approx. {best_candidate.get('timestamp_sec')}s)"
+        
+        if video_citation:
+            console.print(f"\n[bold yellow]Recommended Video Citation:[/bold yellow] {video_citation}\n")
+
+        # Logging
         page_nums = get_page_numbers(topk_idxs, meta)
         logger.save_chat_log(
             query=question,

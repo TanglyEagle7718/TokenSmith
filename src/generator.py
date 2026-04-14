@@ -56,6 +56,14 @@ def get_system_prompt(mode="tutor"):
             - Connect concepts to broader topics when relevant
             End your reply with {ANSWER_END}.
         """).strip(),
+
+        "audio_script": textwrap.dedent(f"""
+            You are a formal, academic teaching assistant. Answer the student's question directly in a clear, spoken monologue style.
+            - Do not include any visual formatting, markdown, emojis, or unpronounceable characters (like raw URLs or brackets).
+            - Your response MUST be between 250 and 300 words to ensure a 2-minute audio duration.
+            - Seamlessly weave citations into the spoken text.
+            End your reply with {ANSWER_END}.
+        """).strip(),
     }
     
     return prompts.get(mode)
