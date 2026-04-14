@@ -12,7 +12,7 @@ import pickle
 import pathlib
 import re
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 import faiss
 from rank_bm25 import BM25Okapi
@@ -20,6 +20,7 @@ from src.embedder import SentenceTransformer
 
 from src.preprocessing.chunking import DocumentChunker, ChunkConfig
 from src.preprocessing.extraction import extract_sections_from_markdown
+from src.video_indexer import VideoIndexer, preprocess_for_bm25
 
 # ----- runtime parallelism knobs (avoid oversubscription) -----
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -44,7 +45,8 @@ def build_index(
     index_prefix: str,
     use_multiprocessing: bool = False,
     use_headings: bool = False,
-    chapters_to_index: Optional[List[int]] = None
+    chapters_to_index: Optional[List[int]] = None,
+    config: Optional[Any] = None
 ) -> None:
     """
     Extract sections, chunk, embed, and build both FAISS and BM25 indexes.
@@ -244,20 +246,9 @@ def build_index(
         json.dump(index_info, f, indent=2)
     print(f"Saved index information: {output_file}")
 
+    if config:
+        print("Starting video indexing...")
+        indexer = VideoIndexer(config, pathlib.Path(artifacts_dir), index_prefix)
+        indexer.process_videos("data/videos")
+
 # ------------------------ Helper functions ------------------------------
-
-def preprocess_for_bm25(text: str) -> list[str]:
-    """
-    Simplifies text to keep only letters, numbers, underscores, hyphens,
-    apostrophes, plus, and hash — suitable for BM25 tokenization.
-    """
-    # Convert to lowercase
-    text = text.lower()
-
-    # Keep only allowed characters
-    text = re.sub(r"[^a-z0-9_'#+-]", " ", text)
-
-    # Split by whitespace
-    tokens = text.split()
-
-    return tokens

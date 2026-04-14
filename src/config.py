@@ -49,6 +49,10 @@ class RAGConfig:
     extracted_index_path: os.PathLike = "data/extracted_index.json"
     page_to_chunk_map_path: os.PathLike = "index/sections/textbook_index_page_to_chunk_map.json"
 
+    # video indexing
+    video_model_path: str = "models/Qwen.Qwen3-VL-Embedding-2B.Q4_K_M.gguf"
+    whisper_model: str = "base"
+
     # ---------- factory + validation ----------
     @classmethod
     def from_yaml(cls, path: os.PathLike) -> RAGConfig:

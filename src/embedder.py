@@ -43,8 +43,12 @@ def _encode_batch_worker(texts: List[str]) -> List[List[float]]:
     for text in texts:
         try:
             # Create embedding
-            emb = _worker_model.create_embedding(text)['data'][0]['embedding']
-            embeddings.append(emb)
+            response = _worker_model.create_embedding(text)
+            emb_data = response['data'][0]['embedding']
+            emb = np.array(emb_data, dtype=np.float32)
+            if emb.ndim == 2:
+                emb = emb.mean(axis=0)
+            embeddings.append(emb.tolist())
         except Exception:
             # Return zero vector on failure
             embeddings.append([0.0] * _worker_embedding_dim)
@@ -81,8 +85,13 @@ class SentenceTransformer:
     def embedding_dimension(self) -> int:
         """Get embedding dimension (cached after first call)."""
         if self._embedding_dimension is None:
-            test_embedding = self.model.create_embedding("test")['data'][0]['embedding']
-            self._embedding_dimension = len(test_embedding)
+            resp = self.model.create_embedding("test")
+            test_embedding = resp['data'][0]['embedding']
+            emb_array = np.array(test_embedding, dtype=np.float32)
+            if emb_array.ndim == 2:
+                self._embedding_dimension = emb_array.shape[1]
+            else:
+                self._embedding_dimension = len(test_embedding)
         return self._embedding_dimension
 
     def encode(self, 
@@ -124,7 +133,13 @@ class SentenceTransformer:
                 response = self.model.create_embedding(batch_texts)
                 
                 # Extract the list of embedding vectors from the response
-                batch_embeddings = [item['embedding'] for item in response['data']]
+                batch_embeddings = []
+                for item in response['data']:
+                    emb = np.array(item['embedding'], dtype=np.float32)
+                    if emb.ndim == 2: # [tokens, dim]
+                        emb = emb.mean(axis=0)
+                    batch_embeddings.append(emb)
+                
                 embeddings.extend(batch_embeddings)
                 
             except Exception as e:

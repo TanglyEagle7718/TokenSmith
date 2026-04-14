@@ -9,7 +9,7 @@ import pickle
 import pathlib
 import json
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 import faiss
 from rank_bm25 import BM25Okapi
@@ -17,7 +17,8 @@ from src.embedder import SentenceTransformer
 
 from src.preprocessing.chunking import DocumentChunker, ChunkConfig
 from src.preprocessing.extraction import extract_sections_from_markdown
-from src.index_builder import build_index, preprocess_for_bm25
+from src.index_builder import build_index
+from src.video_indexer import VideoIndexer, preprocess_for_bm25
 
 DEFAULT_EXCLUSION_KEYWORDS = ['questions', 'exercises', 'summary', 'references']
 
@@ -32,6 +33,7 @@ def add_to_index(
     chapters_to_add: List[int],
     use_multiprocessing: bool = False,
     use_headings: bool = False,
+    config: Optional[Any] = None
 ) -> None:
     """
     Adds new chapters to an existing FAISS and BM25 index.
@@ -58,6 +60,7 @@ def add_to_index(
             use_multiprocessing=use_multiprocessing,
             use_headings=use_headings,
             chapters_to_index=chapters_to_add,
+            config=config,
         )
         return
 
@@ -129,58 +132,59 @@ def add_to_index(
         path_list = [h[1] for h in heading_stack]
         full_section_path = " ".join(path_list)
         full_section_path = f"Chapter {chapter_num} " + full_section_path
-    sub_chunks = chunker.chunk(c['content'])
-    page_pattern = re.compile(r'--- Page (\d+) ---')
+        sub_chunks = chunker.chunk(c['content'])
+        page_pattern = re.compile(r'--- Page (\d+) ---')
 
-    for sub_chunk_id, sub_chunk in enumerate(sub_chunks):
-        chunk_pages = set()
-        fragments = page_pattern.split(sub_chunk)
-        current_chunk_global_id = total_chunks + len(new_chunks)
+        for sub_chunk_id, sub_chunk in enumerate(sub_chunks):
+            chunk_pages = set()
+            fragments = page_pattern.split(sub_chunk)
+            current_chunk_global_id = total_chunks + len(new_chunks)
 
-        # If there is content before the first page marker, it belongs to the current_page.
-        if fragments[0].strip():
-            page_to_chunk_ids.setdefault(current_page, set()).add(current_chunk_global_id)
-            chunk_pages.add(current_page)
+            # If there is content before the first page marker, it belongs to the current_page.
+            if fragments[0].strip():
+                page_to_chunk_ids.setdefault(current_page, set()).add(current_chunk_global_id)
+                chunk_pages.add(current_page)
 
-        # Process new pages found within this sub_chunk.
-        for j in range(1, len(fragments), 2):
-            try:
-                new_page = int(fragments[j]) + 1
-                if fragments[j+1].strip():
-                    page_to_chunk_ids.setdefault(new_page, set()).add(current_chunk_global_id)
-                    chunk_pages.add(new_page)
-                current_page = new_page
-            except (IndexError, ValueError):
+            # Process new pages found within this sub_chunk.
+            for j in range(1, len(fragments), 2):
+                try:
+                    new_page = int(fragments[j]) + 1
+                    if fragments[j+1].strip():
+                        page_to_chunk_ids.setdefault(new_page, set()).add(current_chunk_global_id)
+                        chunk_pages.add(new_page)
+                    current_page = new_page
+                except (IndexError, ValueError):
+                    continue
+
+            # Clean sub_chunk by removing page markers
+            clean_chunk = re.sub(page_pattern, '', sub_chunk).strip()
+
+            if c["heading"] == "Introduction":
                 continue
 
-        # Clean sub_chunk by removing page markers
-        clean_chunk = re.sub(page_pattern, '', sub_chunk).strip()
+            meta = {
+                "filename": markdown_file,
+                "mode": chunk_config.to_string(),
+                "char_len": len(clean_chunk),
+                "word_len": len(clean_chunk.split()),
+                "section": c['heading'],
+                "section_path": full_section_path,
+                "text_preview": clean_chunk[:100],
+                "page_numbers": sorted(list(chunk_pages)),
+                "chunk_id": current_chunk_global_id
+            }
 
-        if c["heading"] == "Introduction":
-            continue
+            if use_headings:
+                chunk_prefix = f"Description: {full_section_path} Content: "
+            else:
+                chunk_prefix = ""
 
-        meta = {
-            "filename": markdown_file,
-            "mode": chunk_config.to_string(),
-            "char_len": len(clean_chunk),
-            "word_len": len(clean_chunk.split()),
-            "section": c['heading'],
-            "section_path": full_section_path,
-            "text_preview": clean_chunk[:100],
-            "page_numbers": sorted(list(chunk_pages)),
-            "chunk_id": current_chunk_global_id
-        }
+            new_chunks.append(chunk_prefix + clean_chunk)
+            new_sources.append(markdown_file)
+            new_metadata.append(meta)
 
-        if use_headings:
-            chunk_prefix = f"Description: {full_section_path} Content: "
-        else:
-            chunk_prefix = ""
-
-        new_chunks.append(chunk_prefix + clean_chunk)
-        new_sources.append(markdown_file)
-        new_metadata.append(meta)
-
-        # Embed new chunks
+    # Embed new chunks
+    if new_chunks:
         print(f"Embedding {len(new_chunks)} new chunks...")
         embedder = SentenceTransformer(embedding_model_path)
         new_embeddings = embedder.encode(new_chunks, batch_size=4, show_progress_bar=True)
@@ -234,3 +238,8 @@ def add_to_index(
             json.dump(index_info, f, indent=2)
 
         print(f"Successfully added {len(new_chunks)} new chunks for chapters {chapters_to_index}.")
+
+    if config:
+        print("Starting video indexing...")
+        indexer = VideoIndexer(config, pathlib.Path(artifacts_dir), index_prefix)
+        indexer.process_videos("data/videos")
