@@ -95,7 +95,7 @@ def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
     artifacts_dir = cfg.get_artifacts_directory(partial=True)
 
     add_to_index(
-        markdown_file="data/silberschatz.md",
+        markdown_file="data/silbershatz.md",
         chunker=chunker,
         chunk_config=cfg.chunk_config,
         embedding_model_path=cfg.embed_model,
