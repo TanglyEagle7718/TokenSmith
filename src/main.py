@@ -15,6 +15,7 @@ from src.config import RAGConfig
 from src.generator import answer, dedupe_generated_text
 from src.index_builder import build_index
 from src.index_updater import add_to_index
+from src.video_indexer import VideoIndexer, preprocess_for_bm25
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
 from src.preprocessing.chunking import DocumentChunker
@@ -80,6 +81,7 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
         use_multiprocessing=args.multiproc_indexing,
         use_headings=args.embed_with_headings,
         chapters_to_index=args.chapters,
+        config=cfg,
     )
 
 def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
@@ -93,7 +95,7 @@ def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
     artifacts_dir = cfg.get_artifacts_directory(partial=True)
 
     add_to_index(
-        markdown_file="data/silberschatz.md",
+        markdown_file="data/silbershatz.md",
         chunker=chunker,
         chunk_config=cfg.chunk_config,
         embedding_model_path=cfg.embed_model,
@@ -101,6 +103,7 @@ def run_add_chapters_mode(args: argparse.Namespace, cfg: RAGConfig):
         index_prefix=args.index_prefix,
         chapters_to_add=args.chapters,
         use_headings=args.embed_with_headings,
+        config=cfg,
     )
     print("Successfully added chapters to the index.")
 
@@ -231,8 +234,42 @@ def get_answer(
         # Accumulate the full text while rendering incremental Markdown chunks
         ans = render_streaming_ans(console, stream_iter)
 
-        # Logging
+        # Video Citation Logic - Improved Selection
         meta = artifacts.get("meta", [])
+        video_candidates = []
+        for idx in topk_idxs:
+            if idx < len(meta):
+                m = meta[idx]
+                if m.get("type") in ["video_transcript", "video_frame", "video_title"]:
+                    video_candidates.append(m)
+        
+        video_citation = None
+        if video_candidates:
+            # Score candidates based on filename overlap with query
+            query_tokens = set(preprocess_for_bm25(question))
+            best_candidate = None
+            best_score = -1
+            
+            for cand in video_candidates:
+                filename = cand.get("filename", "")
+                name_tokens = set(preprocess_for_bm25(filename.replace(".mp4", "")))
+                overlap = len(query_tokens.intersection(name_tokens))
+                
+                # Boost if the video was ranked higher in the retrieval results
+                # by adding a small fraction of the inverse rank
+                score = overlap
+                
+                if score > best_score:
+                    best_score = score
+                    best_candidate = cand
+            
+            if best_candidate:
+                video_citation = f"{best_candidate.get('filename')} (approx. {best_candidate.get('timestamp_sec')}s)"
+        
+        if video_citation:
+            console.print(f"\n[bold yellow]Recommended Video Citation:[/bold yellow] {video_citation}\n")
+
+        # Logging
         page_nums = get_page_numbers(topk_idxs, meta)
         logger.save_chat_log(
             query=question,

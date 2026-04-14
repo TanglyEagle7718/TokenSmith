@@ -1,12 +1,14 @@
-embed_model: "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
+embed_model: "models/Qwen.Qwen3-VL-Embedding-2B.Q4_K_M.gguf"
+video_model_path: "models/Qwen.Qwen3-VL-Embedding-2B.Q4_K_M.gguf"
+whisper_model: "base"
 top_k: 10
 num_candidates: 50
 ensemble_method: "rrf"
-ranker_weights: {"faiss":1,"bm25":0,"index_keywords":0}
+ranker_weights: {"faiss":0.7,"bm25":0.3,"index_keywords":0}
 rrf_k: 60
 max_gen_tokens: 400
 chunk_mode : "recursive_sections"
-gen_model: "models/qwen2.5-3b-instruct-q8_0.gguf"
+gen_model: "models/qwen2.5-1.5b-instruct-q5_k_m.gguf"
 chunk_size: 2000
 chunk_overlap: 200
 use_hyde: false
