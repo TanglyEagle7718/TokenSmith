@@ -244,13 +244,20 @@ def get_answer(
             return ANSWER_NOT_FOUND
 
     # 2. Generation
-    system_prompt = "audio_script" if is_audio_mode else (args.system_prompt_mode or cfg.system_prompt_mode)
-    
-    stream_iter = answer(
-        actual_query, ranked_chunks, cfg.gen_model,
-        max_tokens=cfg.max_gen_tokens,
-        system_prompt_mode=system_prompt
-    )
+    if is_audio_mode:
+        system_prompt = "multi_stage_audio"
+        from src.generator import multi_stage_answer
+        stream_iter = multi_stage_answer(
+            actual_query, ranked_chunks, cfg.gen_model,
+            max_tokens=cfg.max_gen_tokens
+        )
+    else:
+        system_prompt = (args.system_prompt_mode or cfg.system_prompt_mode)
+        stream_iter = answer(
+            actual_query, ranked_chunks, cfg.gen_model,
+            max_tokens=cfg.max_gen_tokens,
+            system_prompt_mode=system_prompt
+        )
 
     if is_test_mode:
         # We do not render MD in the test mode

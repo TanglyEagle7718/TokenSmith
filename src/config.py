@@ -18,7 +18,7 @@ class RAGConfig:
     chunk_overlap: int = 200
 
     # retrieval + ranking
-    top_k: int = 10
+    top_k: int = 20
     num_candidates: int = 60
     embed_model: str = "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
     ensemble_method: str = "rrf"
@@ -27,10 +27,10 @@ class RAGConfig:
         default_factory=lambda: {"faiss": 1.0, "bm25": 0.0, "index_keywords": 0.0}
     )
     rerank_mode: str = ""
-    rerank_top_k: int = 5
+    rerank_top_k: int = 10
 
     # generation
-    max_gen_tokens: int = 400
+    max_gen_tokens: int = 1200
     gen_model: str = "models/qwen2.5-3b-instruct-q8_0.gguf"
     
     # testing

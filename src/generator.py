@@ -60,8 +60,27 @@ def get_system_prompt(mode="tutor"):
         "audio_script": textwrap.dedent(f"""
             You are a formal, academic teaching assistant. Answer the student's question directly in a clear, spoken monologue style.
             - Do not include any visual formatting, markdown, emojis, or unpronounceable characters (like raw URLs or brackets).
-            - Your response MUST be between 250 and 300 words to ensure a 2-minute audio duration.
-            - Seamlessly weave citations into the spoken text.
+            - Your response MUST be between 750 and 800 words to ensure a 5-minute audio duration.
+            - Seamlessly weave citations into the spoken text (e.g., 'As discussed in Lecture 4...' or 'According to Chapter 2 of the textbook...').
+            End your reply with {ANSWER_END}.
+        """).strip(),
+
+        "audio_outline": textwrap.dedent(f"""
+            You are an academic planner. Create a detailed outline for a 5-minute formal explanation (approx 800 words) on the given topic.
+            - Use the provided textbook excerpts as the primary source material.
+            - Break the explanation into 5-6 logical sections (Introduction, 3-4 Key Concepts/Examples, and Conclusion).
+            - For each section, list specific points or citations to include.
+            - Focus on creating a logical flow for a spoken monologue.
+            End your reply with {ANSWER_END}.
+        """).strip(),
+
+        "audio_expand": textwrap.dedent(f"""
+            You are a formal, academic teaching assistant. Using the provided outline and textbook excerpts, write a full, spoken monologue.
+            - Your response MUST be between 750 and 800 words.
+            - Follow the provided outline strictly.
+            - Do not include any visual formatting (markdown, bullets, etc.). 
+            - Weave citations naturally into the speech.
+            - Ensure a smooth transition between sections for a high-quality audio experience.
             End your reply with {ANSWER_END}.
         """).strip(),
     }
@@ -112,7 +131,7 @@ def format_prompt(chunks, query, max_chunk_chars=400, system_prompt_mode="tutor"
 
 _LLM_CACHE = {}
 
-def get_llama_model(model_path: str, n_ctx: int = 4096):
+def get_llama_model(model_path: str, n_ctx: int = 8192):
     if model_path not in _LLM_CACHE:
         _LLM_CACHE[model_path] = Llama(model_path=model_path,
                                        n_ctx=n_ctx,
@@ -148,6 +167,20 @@ def run_llama_cpp(prompt: str, model_path: str, max_tokens: int, temperature: fl
 def answer(query: str, chunks, model_path: str, max_tokens: int = 300, system_prompt_mode: str = "tutor", temperature: float = 0.2):
     prompt = format_prompt(chunks, query, system_prompt_mode=system_prompt_mode)
     return stream_llama_cpp(prompt, model_path, max_tokens=max_tokens, temperature=temperature)
+
+def multi_stage_answer(query: str, chunks, model_path: str, max_tokens: int = 1200, temperature: float = 0.2):
+    # Stage 1: Outline
+    outline_prompt = format_prompt(chunks, query, system_prompt_mode="audio_outline")
+    print("\n[Stage 1/2] Planning explanation structure...")
+    outline_res = run_llama_cpp(outline_prompt, model_path, max_tokens=500, temperature=temperature)
+    outline_text = outline_res["choices"][0]["text"].replace(ANSWER_START, "").strip()
+    
+    # Stage 2: Expansion
+    expansion_query = f"Topic: {query}\n\nOutline to follow:\n{outline_text}"
+    expansion_prompt = format_prompt(chunks, expansion_query, system_prompt_mode="audio_expand")
+    
+    print("[Stage 2/2] Generating full 5-minute monologue...")
+    return stream_llama_cpp(expansion_prompt, model_path, max_tokens=max_tokens, temperature=temperature)
 
 def dedupe_generated_text(text: str) -> str:
     """

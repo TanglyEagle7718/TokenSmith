@@ -4,6 +4,7 @@ import os
 import onnxruntime as ort
 import re
 import time
+import numpy as np
 
 os.environ["HF_HUB_OFFLINE"] = "1"
 
@@ -11,15 +12,10 @@ _KOKORO_INSTANCE = None
 
 def clean_text_for_tts(text: str) -> str:
     text = re.sub(r'(\*\*|__|\*|_)', '', text)
-    
     text = re.sub(r'#+\s?', '', text)
-    
     text = re.sub(r'`', '', text)
-    
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-    
     text = re.sub(r'[\[\]]', '', text)
-    
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
@@ -48,15 +44,30 @@ def generate_audio_response(text: str, output_filepath: str) -> str:
     kokoro = get_kokoro()
     
     clean_text = clean_text_for_tts(text)
+    sentences = re.split(r'(?<=[.!?])\s+', clean_text)
+    all_samples = []
+    sample_rate = 24000
     
+    print(f"Generating audio for {len(sentences)} sentences...")
     start_time = time.time()
     
-    samples, sample_rate = kokoro.create(
-        clean_text, 
-        voice="am_adam", 
-        speed=1.0, 
-        lang="en-us"
-    )
+    for sentence in sentences:
+        if not sentence.strip():
+            continue
+            
+        samples, sr = kokoro.create(
+            sentence, 
+            voice="am_adam", 
+            speed=1.0, 
+            lang="en-us"
+        )
+        all_samples.append(samples)
+        sample_rate = sr
+    
+    if not all_samples:
+        raise ValueError("No audio samples were generated.")
+        
+    final_samples = np.concatenate(all_samples)
     
     end_time = time.time()
     duration = end_time - start_time
@@ -64,5 +75,5 @@ def generate_audio_response(text: str, output_filepath: str) -> str:
     
     os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
     
-    sf.write(output_filepath, samples, sample_rate)
+    sf.write(output_filepath, final_samples, sample_rate)
     return output_filepath

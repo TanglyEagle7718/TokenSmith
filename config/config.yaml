@@ -1,12 +1,12 @@
 embed_model: "models/Qwen.Qwen3-VL-Embedding-2B.Q4_K_M.gguf"
 video_model_path: "models/Qwen.Qwen3-VL-Embedding-2B.Q4_K_M.gguf"
 whisper_model: "base"
-top_k: 10
+top_k: 20
 num_candidates: 50
 ensemble_method: "rrf"
 ranker_weights: {"faiss":0.7,"bm25":0.3,"index_keywords":0}
 rrf_k: 60
-max_gen_tokens: 400
+max_gen_tokens: 1200
 chunk_mode : "recursive_sections"
 gen_model: "models/qwen2.5-1.5b-instruct-q5_k_m.gguf"
 chunk_size: 2000
@@ -15,4 +15,4 @@ use_hyde: false
 hyde_max_tokens: 300
 use_indexed_chunks: false
 rerank_mode: "cross_encoder"
-rerank_top_k: 5
+rerank_top_k: 10

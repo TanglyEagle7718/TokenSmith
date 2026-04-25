@@ -59,11 +59,11 @@ class VideoIndexer:
             model_path=video_model_path,
             embedding=True,
             logits_all=True,
-            clip_model_path=video_model_path,
+            # clip_model_path=video_model_path,
             n_ctx=4096,
             n_batch=512,
-            n_gpu_layers=-1,
-            verbose=False
+            n_gpu_layers=0,
+            verbose=True
         )
         print(f"Model loaded in {time.time() - start_time:.2f}s")
 
