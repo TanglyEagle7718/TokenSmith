@@ -55,6 +55,10 @@ export-env:
 test:
 	conda run -n tokensmith python -m pytest tests/ -v || echo "No tests found"
 
+# Run tests with coverage
+test-cov:
+	conda run -n tokensmith python -m pytest tests/ -v --cov=src --cov-report=term-missing --cov-report=html || echo "No tests found"
+
 # Clean
 clean:
 	rm -rf build/ dist/ *.egg-info/
